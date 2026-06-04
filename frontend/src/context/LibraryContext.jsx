@@ -8,7 +8,7 @@ export function useLibrary() {
   return useContext(LibraryContext);
 }
 
-const API_URL = 'http://localhost:8000/api';
+const API_URL = 'https://library-backend-1-itou.onrender.com/api';
 
 export function LibraryProvider({ children }) {
   const [books, setBooks] = useState([]);

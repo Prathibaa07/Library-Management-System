@@ -15,7 +15,7 @@ export default function Contact() {
     try {
       const fullMessage = `Contact Form Submission from ${formData.name} (${formData.email}): ${formData.message}`;
       
-      await axios.post('http://localhost:8000/api/notifications', {
+      await axios.post('https://library-backend-1-itou.onrender.com/api/notifications', {
         userId: 'admin',
         message: fullMessage,
         type: 'contact',

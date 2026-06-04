@@ -3,8 +3,8 @@ import time
 
 # Connect to MongoDB
 try:
-    # TODO: Replace <db_password> with your actual database password!
-    client = pymongo.MongoClient('mongodb+srv://pprathibaa07_db_user:prathi@07@cluster0.y6czhmb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', serverSelectionTimeoutMS=5000)
+    # URL encoded password (replaced @ with %40)
+    client = pymongo.MongoClient('mongodb+srv://pprathibaa07_db_user:prathi%4007@cluster0.y6czhmb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', serverSelectionTimeoutMS=5000)
     db = client['LMS']
     # Trigger connection check
     client.server_info()

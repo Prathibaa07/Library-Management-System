@@ -1,6 +1,6 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { categories } from '../data/mockData';
+import { categories as defaultCategories } from '../data/mockData';
 
 const LibraryContext = createContext();
 
@@ -8,7 +8,7 @@ export function useLibrary() {
   return useContext(LibraryContext);
 }
 
-const API_URL = 'https://library-backend-1-itou.onrender.com/api';
+const API_URL = 'https://library-management-system-1-0h4b.onrender.com/api';
 
 export function LibraryProvider({ children }) {
   const [books, setBooks] = useState([]);
@@ -20,17 +20,31 @@ export function LibraryProvider({ children }) {
   
   const [loading, setLoading] = useState(true);
 
+  const categories = useMemo(() => {
+    const uniqueCats = new Set(defaultCategories);
+    books.forEach(b => {
+      if (b.category) uniqueCats.add(b.category);
+    });
+    return Array.from(uniqueCats).sort();
+  }, [books]);
+
   const fetchData = async () => {
     try {
+      const t = new Date().getTime();
       const [booksRes, usersRes, issuedRes, requestsRes, logsRes, notifsRes] = await Promise.all([
-        axios.get(`${API_URL}/books`),
-        axios.get(`${API_URL}/users`),
-        axios.get(`${API_URL}/issued`),
-        axios.get(`${API_URL}/requests`),
-        axios.get(`${API_URL}/logs`),
-        axios.get(`${API_URL}/notifications`)
+        axios.get(`${API_URL}/books?t=${t}`),
+        axios.get(`${API_URL}/users?t=${t}`),
+        axios.get(`${API_URL}/issued?t=${t}`),
+        axios.get(`${API_URL}/requests?t=${t}`),
+        axios.get(`${API_URL}/logs?t=${t}`),
+        axios.get(`${API_URL}/notifications?t=${t}`)
       ]);
-      setBooks(booksRes.data);
+      const sortedBooks = booksRes.data.sort((a, b) => {
+        const catCompare = a.category.localeCompare(b.category);
+        if (catCompare !== 0) return catCompare;
+        return a.title.localeCompare(b.title);
+      });
+      setBooks(sortedBooks);
       setUsers(usersRes.data);
       setIssuedBooks(issuedRes.data);
       setRequests(requestsRes.data);
@@ -55,9 +69,32 @@ export function LibraryProvider({ children }) {
   const addBook = async (newBook) => {
     try {
       const res = await axios.post(`${API_URL}/books`, newBook);
-      setBooks(prev => [...prev, res.data]);
+      setBooks(prev => {
+        const newBooks = [...prev, res.data];
+        return newBooks.sort((a, b) => {
+          const catCompare = a.category.localeCompare(b.category);
+          if (catCompare !== 0) return catCompare;
+          return a.title.localeCompare(b.title);
+        });
+      });
+      return res.data;
     } catch (err) {
       console.error(err);
+      throw err;
+    }
+  };
+
+  const addPurchaseDetailsNotification = async (bookTitle, purchaseDetails) => {
+    try {
+      const res = await axios.post(`${API_URL}/notifications`, {
+        userId: 'admin',
+        message: `Purchase details recorded for "${bookTitle}"`,
+        type: 'add_book_details',
+        extraData: purchaseDetails
+      });
+      setNotifications(prev => [res.data, ...prev]);
+    } catch (err) {
+      console.error("Error creating purchase notification", err);
     }
   };
 
@@ -74,6 +111,18 @@ export function LibraryProvider({ children }) {
     try {
       await axios.put(`${API_URL}/requests/${reqId}`, { status: 'approved' });
       setRequests(prev => prev.map(r => r.id === reqId ? { ...r, status: 'approved' } : r));
+      
+      // Send notification to the student
+      const req = requests.find(r => r.id === reqId);
+      if (req && req.userId) {
+        const res = await axios.post(`${API_URL}/notifications`, {
+          userId: req.userId,
+          message: `Your request for the book "${req.bookTitle}" was accepted and added.`,
+          type: 'general',
+          studentId: req.userId
+        });
+        setNotifications(prev => [res.data, ...prev]);
+      }
     } catch (err) {
       console.error(err);
     }
@@ -114,6 +163,9 @@ export function LibraryProvider({ children }) {
       if (bookIdToReturn) {
         setBooks(prev => prev.map(b => b.id === bookIdToReturn ? { ...b, available: b.available + 1 } : b));
       }
+      
+      const usersRes = await axios.get(`${API_URL}/users`);
+      setUsers(usersRes.data);
     } catch (err) {
       console.error(err);
     }
@@ -180,19 +232,31 @@ export function LibraryProvider({ children }) {
     }
   };
 
-  const createBorrowRequestNotification = async (bookId, userId) => {
+  const createBorrowRequestNotification = async (bookId, userId, proposedDueDate) => {
     try {
-      const book = books.find(b => b.id === bookId);
-      const user = users.find(u => u.id === userId);
-      if (!book || !user) return;
+      const book = books.find(b => String(b.id) === String(bookId));
+      let user = users.find(u => String(u.id) === String(userId));
       
-      const message = `Student ${user.name} (${user.email}) requested to borrow "${book.title}".`;
+      // Failsafe: if user not in local state, try to fetch fresh from API
+      if (!user && userId !== 'u1') {
+        const t = new Date().getTime();
+        const usersRes = await axios.get(`${API_URL}/users?t=${t}`);
+        setUsers(usersRes.data);
+        user = usersRes.data.find(u => String(u.id) === String(userId));
+      }
+      
+      const bookTitle = book ? book.title : 'a book';
+      const userName = user ? user.name : 'A student';
+      const userEmail = user ? user.email : 'No Email';
+      
+      const message = `Student ${userName} (${userEmail}) requested to borrow "${bookTitle}".`;
       const res = await axios.post(`${API_URL}/notifications`, {
         userId: 'admin',
         message,
         type: 'borrow_request',
         bookId,
-        studentId: userId
+        studentId: userId,
+        proposedDueDate
       });
       setNotifications(prev => [res.data, ...prev]);
       return res.data;
@@ -205,6 +269,13 @@ export function LibraryProvider({ children }) {
     try {
       await axios.put(`${API_URL}/notifications/${notifId}`, { status: 'approved' });
       setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, status: 'approved', read: true } : n));
+      
+      const notif = notifications.find(n => n.id === notifId);
+      if (notif && notif.studentId && notif.bookId) {
+        // The backend `notifications_update` API already inserts into `issuedBooks`
+        // and creates a notification for the student automatically.
+        // We do NOT need to do it again here.
+      }
       const [booksRes, issuedRes, notifsRes] = await Promise.all([
         axios.get(`${API_URL}/books`),
         axios.get(`${API_URL}/issued`),
@@ -215,15 +286,26 @@ export function LibraryProvider({ children }) {
       setNotifications(notifsRes.data);
     } catch (err) {
       console.error("Error approving borrow request", err);
+      alert(err.response?.data?.error || "Error approving request. The book might be out of stock or deleted.");
+      throw err;
     }
   };
 
   const markNotificationsAsRead = async (notifIds) => {
     try {
-      await Promise.all(notifIds.map(id => axios.put(`${API_URL}/notifications/${id}`, { status: 'read' })));
-      setNotifications(prev => prev.map(n => notifIds.includes(n.id) ? { ...n, read: true, status: 'read' } : n));
+      await Promise.all(notifIds.map(id => axios.put(`${API_URL}/notifications/${id}`, { read: true })));
+      setNotifications(prev => prev.map(n => notifIds.includes(n.id) ? { ...n, read: true } : n));
     } catch (err) {
       console.error("Error marking notifications as read", err);
+    }
+  };
+
+  const deleteNotification = async (notifId) => {
+    try {
+      await axios.delete(`${API_URL}/notifications/${notifId}`);
+      setNotifications(prev => prev.filter(n => n.id !== notifId));
+    } catch (err) {
+      console.error("Error deleting notification", err);
     }
   };
 
@@ -231,6 +313,23 @@ export function LibraryProvider({ children }) {
     try {
       await axios.put(`${API_URL}/notifications/${notifId}`, { status: 'rejected' });
       setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, status: 'rejected', read: true } : n));
+      
+      const notif = notifications.find(n => n.id === notifId);
+      if (notif && notif.studentId && notif.bookId) {
+        const book = books.find(b => b.id === notif.bookId);
+        const bookTitle = book ? book.title : 'book';
+        
+        await axios.post(`${API_URL}/notifications`, {
+          userId: notif.studentId,
+          message: `Your borrow '${bookTitle}' was rejected.`,
+          type: 'general',
+          studentId: notif.studentId
+        });
+        
+        // Refresh notifications to show the new one
+        const notifsRes = await axios.get(`${API_URL}/notifications`);
+        setNotifications(notifsRes.data);
+      }
     } catch (err) {
       console.error("Error rejecting borrow request", err);
     }
@@ -257,9 +356,9 @@ export function LibraryProvider({ children }) {
     }
   };
 
-  const extendBookDue = async (issueId, days) => {
+  const extendBookDue = async (issueId, newDate) => {
     try {
-      const res = await axios.post(`${API_URL}/issued/extend/${issueId}`, { days });
+      const res = await axios.post(`${API_URL}/issued/extend/${issueId}`, { newDate });
       setIssuedBooks(prev => prev.map(i => i.id === issueId ? { ...i, dueDate: res.data.newDueDate, status: 'issued', fine: 0 } : i));
       return res.data;
     } catch (err) {
@@ -288,11 +387,12 @@ export function LibraryProvider({ children }) {
   return (
     <LibraryContext.Provider value={{
       books, users, issuedBooks, requests, notifications, categories, userLogs,
+      fetchData,
       addBook, requestBook, approveRequest, rejectRequest, borrowBook, returnBook,
       signupUser, loginUser, createLoginLog, logStudentLogout,
       createBorrowRequestNotification, approveBorrowRequest, rejectBorrowRequest,
       updateBookDetails, deleteBook, extendBookDue, deleteUser, deleteLog,
-      markNotificationsAsRead, deleteIssuedBook
+      markNotificationsAsRead, deleteIssuedBook, deleteNotification, addPurchaseDetailsNotification
     }}>
       {children}
     </LibraryContext.Provider>
